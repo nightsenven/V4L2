@@ -1,0 +1,132 @@
+V4L2驱动框架主要的对象有：
+    video_device、v4l2_device、v4l2_subdev、videobuf
+
+video_device
+    一个字符设备，为用户空间提供设备节点(/dev/videox)，提供系统调用的相关操作(open、ioctl…)
+
+v4l2_device
+    嵌入到video_device中，表示一个v4l2设备的实例
+    在V4L2驱动中，使用V4L2_device来表示摄像头控制器,使用V4L2_subdev来表示具体的某一个摄像头的I2C控制模块，进而通过其控制摄像头V4L2_device里有一个V4L2_subdev链表，可以选择V4L2_device去控制哪一个V4L2_subdev。
+v4l2_subdev
+    依附在v4l2_device之下，并表示一个v4l2设备的子设备，一个v4l2_devide下可以有多个sub_device
+
+videobuf
+    v4l2驱动的缓存管理
+
+复杂的字符设备
+    对于复杂的字符设备，内核都是采用分层的方法，一般分驱动核心层还有硬件相关层。
+    核心层会帮你完成字符设备的分配，fops的设置，注册字符设备，并向硬件相关层提供一个相应的对象和注册接口。
+    硬件相关层则需要分配相应的对象，设置对象和对象的fops，并注册到核心层中，当应用层发生系统调用3ff7，会先来到核心层，核心层再通过回调函数调用到硬件相关层的驱动。
+对于V4L2的驱动框架也是如此，可分为V4L2驱动核心层和硬件相关层。
+V4L2分为核心层还有硬件相关层：
+    核心层负责注册字符设备，然后提供video_device对象和相应的注册接口给硬件相关层使用
+硬件相关层需要分配一个video_device并设置它，然后向核心层注册，核心层会为其注册字符设备并且创建设备节点(/dev/videox)。同时硬件相关层还需要分配和设置相应的v4l2_device和v4l2_subdev，其中v4l2_device的一个比较重要的意义就是管理v4l2_subdev，当然有一些驱动并不需要实现v4l2_subdev，此时v4l2_device的意义就不是很大了；
+    当应用层通过/dev/video来操作设备的时候，首先会来到V4L2的核心层，核心层通过注册进
+的video_device的回调函数调用相应的操作函数，vvideo_device可以直接操作硬件或者是通过v4l2_subdev来操作硬件
+
+ V4L2主要对象的数据结构：
+    1、video_device
+         struct video_device
+        {
+            struct cdev *cdev;         /* character device */
+            struct v4l2_device *v4l2_dev;  /* v4l2_device parent */
+            const struct v4l2_file_operations *fops;  /* device ops */
+            const struct v4l2_ioctl_ops *ioctl_ops;  /* ioctl callbacks */
+        };
+        其中v4l2_file_operations和v4l2_ioctl_ops如下：
+            struct v4l2_file_operations
+            {
+                struct module *owner;
+                ssize_t (*read) (struct file *, char __user *, size_t, loff_t *);
+                ssize_t (*write) (struct file *, const char __user *, size_t, loff_t *);
+                unsigned int (*poll) (struct file *, struct poll_table_struct *);
+                long (*ioctl) (struct file *, unsigned int, unsigned long);
+                long (*unlocked_ioctl) (struct file *, unsigned int, unsigned long);
+                unsigned long (*get_unmapped_area) (struct file *, unsigned long,
+                unsigned long, unsigned long, unsigned long);
+                int (*mmap) (struct file *, struct vm_area_struct *);
+                int (*open) (struct file *);
+                int (*release) (struct file *);
+            }；
+       V4L2的ioctl操作：
+        struct v4l2_ioctl_ops
+        {
+            int (*vidioc_querycap)(struct file *file, void *fh, struct v4l2_capability *cap);
+            /* Buffer handlers */
+            int (*vidioc_reqbufs) (struct file *file, void *fh, struct v4l2_requestbuffers *b);
+            int (*vidioc_querybuf)(struct file *file, void *fh, struct v4l2_buffer *b);
+            int (*vidioc_qbuf)    (struct file *file, void *fh, struct v4l2_buffer *b);
+            int (*vidioc_dqbuf)   (struct file *file, void *fh, struct v4l2_buffer *b);
+            /* Stream on/off */
+            int (*vidioc_streamon) (struct file *file, void *fh, enum v4l2_buf_type i);
+            int (*vidioc_streamoff)(struct file *file, void *fh, enum v4l2_buf_type i);
+            ...
+        };
+    2、v4l2_device：
+        struct v4l2_device
+        {
+            /* used to keep track of the registered subdevs */
+            struct list_head subdevs;
+            ...
+        };
+        v4l2_device中有一个v4l2_subdev的链表，v4l2_device的主要目的时用来管理v4l2_subdev。
+    3、v4l2_subdev：
+        struct v4l2_subdev
+        {
+            struct list_head list;
+            struct v4l2_device *v4l2_dev;
+            const struct v4l2_subdev_ops *ops;
+        };
+        v4l2_subdev中有一个v4l2_subdev_ops，实现了一系列的操作，供v4l2_device调用。
+        struct v4l2_subdev_ops
+        {
+            const struct v4l2_subdev_core_ops   *core;
+            const struct v4l2_subdev_tuner_ops  *tuner;
+            const struct v4l2_subdev_audio_ops  *audio;
+            const struct v4l2_subdev_video_ops  *video;
+            const struct v4l2_subdev_vbi_ops    *vbi;
+            const struct v4l2_subdev_ir_ops     *ir;
+            const struct v4l2_subdev_sensor_ops *sensor;
+        };
+        struct v4l2_subdev_core_ops
+        {
+            ...
+            int (*s_config)(struct v4l2_subdev *sd, int irq, void *platform_data);
+            int (*init)(struct v4l2_subdev *sd, u32 val);
+            int (*s_gpio)(struct v4l2_subdev *sd, u32 val);
+            int (*g_ctrl)(struct v4l2_subdev *sd, struct v4l2_control *ctrl);
+            int (*s_ctrl)(struct v4l2_subdev *sd, struct v4l2_control *ctrl);
+            int (*s_std)(struct v4l2_subdev *sd, v4l2_std_id norm);
+            long (*ioctl)(struct v4l2_subdev *sd, unsigned int cmd, void *arg);
+            ...
+        };
+        struct v4l2_subdev_video_ops
+        {
+            ...
+            int (*enum_fmt)(struct v4l2_subdev *sd, struct v4l2_fmtdesc *fmtdesc);
+            int (*g_fmt)(struct v4l2_subdev *sd, struct v4l2_format *fmt);
+            int (*try_fmt)(struct v4l2_subdev *sd, struct v4l2_format *fmt);
+            int (*s_fmt)(struct v4l2_subdev *sd, struct v4l2_format *fmt);
+            int (*cropcap)(struct v4l2_subdev *sd, struct v4l2_cropcap *cc);
+            int (*g_crop)(struct v4l2_subdev *sd, struct v4l2_crop *crop);
+            int (*s_crop)(struct v4l2_subdev *sd, struct v4l2_crop *crop);
+            int (*g_parm)(struct v4l2_subdev *sd, struct v4l2_streamparm *param);
+            int (*s_parm)(struct v4l2_subdev *sd, struct v4l2_streamparm *param);
+            ...
+        };
+V4L2提供的注册接口：
+    1、video_device：
+      注册：
+        int video_register_device(struct video_device *vdev, int type, int nr);
+      注销：
+        void video_unregister_device(struct video_device *vdev);
+    2、v4l2_device：
+      注册：
+        int v4l2_device_register(struct device *dev, struct v4l2_device *v4l2_dev);
+      注销：
+        void v4l2_device_unregister(struct v4l2_device *v4l2_dev);
+    3、v4l2_subdev：
+      注册：
+        int v4l2_device_register_subdev(struct v4l2_device *v4l2_dev,struct v4l2_subdev *sd);
+      注销：
+        void v4l2_device_unregister_subdev(struct v4l2_subdev *sd);

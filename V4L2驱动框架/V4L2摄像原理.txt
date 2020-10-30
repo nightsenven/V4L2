@@ -1,0 +1,89 @@
+V4L2 --》video for linux two(linux中的视频架构版本2)
+     作用：linux为了方便广大程序员开发基于linux系统的音视频产品，提成了v4l2架构,该架构把音视频产品驱动和应用开发需要的接口和参数都定义好了
+           比如：我想设置摄像头的采集格式
+                    struct v4l2_pix_format
+                    {
+                       宽
+                       高
+                       像素点格式 jpeg   yuv
+                    }
+     类比：触摸屏 --》linux中输入子系统模型/usr/include/linux/input.h
+           V4L2  --》 /usr/include/linux/videodev2.
+另外v4l2驱动框架最主要的是各个ioctl实现的功能。
+
+摄像头编程
+    1、在linux系统上实现摄像头编程
+          #include <stropts.h>
+          应用程序和底层驱动之间进行数据通信的一个接口
+          int ioctl(int fildes, int request, ... /* arg */);  //给硬件设备的驱动发送指令(命令)
+                参数：fildes --》你要发送指令的硬件设备的文件描述符
+                      request --》你要发送什么指令给硬件设备的驱动
+
+        (1)摄像头的工作原理
+              常见的摄像头拍摄的画面：jpg和yuv格式
+                        yuv格式：也是一种颜色编码格式
+        (2)摄像头编程步骤
+              第一步：打开摄像头的驱动
+                       int camerafd=open("/dev/video7");
+              第二步：设置摄像头的采集格式(宽，高， 画面格式)
+                       ioctl(camerafd,"V4L2架构中定义好的指令")    ioctl(camerafd,"helloworld") -->蒙圈状态
+                      指令：  VIDIOC_S_FMT
+                      用到的变量：struct v4l2_format
+                                 {
+                                      type;  //V4L2_BUF_TYPE_VIDEO_CAPTURE
+                                      union fmt; //该联合体有个成员  struct v4l2_pix_format pix;
+                                 }
+                                struct v4l2_pix_format {
+	                        		width;  画面的宽
+	                             	        height; 高
+	                                	pixelformat; 采集格式
+	                                        enum v4l2_field  	field;
+                                };
+                       ioctl(camerafd,VIDIOC_S_FMT,你想把摄像头的采集格式设备成啥样)
+              第三步：申请缓冲区用于存放采集的画面数据
+                      指令：  VIDIOC_REQBUFS
+                      用到的变量：struct v4l2_requestbuffers
+                              struct v4l2_requestbuffers {
+	                          		count; //你打算申请多少个缓冲块，每个缓冲块存储一帧画面数据，一般设置成5以内
+	                                        type;  //V4L2_BUF_TYPE_VIDEO_CAPTURE
+	                                        memory; //V4L2_MEMORY_MMAP
+                              };
+                       ioctl(camerafd,VIDIOC_REQBUFS,)
+             第四步：分配你刚才申请的缓冲块
+                      指令：VIDIOC_QUERYBUF
+                      用到的变量：struct v4l2_buffer
+                                 {
+                                     index; //你刚才申请的缓冲块索引，从0开始
+                                     type;   //V4L2_BUF_TYPE_VIDEO_CAPTURE
+                                     memory; //V4L2_MEMORY_MMAP
+                                     offset; //分配给你的多个缓冲块之间的地址偏移
+                                     length; //分配给你的那个缓冲块的大小
+
+                                 }
+                      同时用mmap映射得到对应缓冲块的首地址和长度大小
+
+             第五步：入队(把摄像头拍摄的画面保存到缓冲块中)
+                      入队指令：VIDIOC_QBUF
+                      用到的变量：struct v4l2_buffer
+
+             第六步：开始采集
+                      指令：VIDIOC_STREAMON
+                      用到的变量：enum v4l2_buf_type
+                      enum v4l2_buf_type    VIDIOC_STREAMON
+                      type = V4L2_BUF_TYPE_VIDEO_CAPTURE
+             第七步：循环出队入队(while(1)中for循环里面出队入队)
+                      出队指令： VIDIOC_DQBUF
+                      用到的变量：struct v4l2_buffer
+                      并且要将yuyv数据转换成rgb
+            第八步：结束采集
+                      指令：VIDIOC_STREAMOFF
+                      用到的变量：enum v4l2_buf_type
+YUV数据转换RGB数据的公式
+    公式一：颜色有点失真
+        r = 1164*(y-16)/1000 + 1596*(v-128)/1000;
+        g = 1164*(y-16)/1000 + 813*(v-128)/1000 - 391*(u-128)/1000;
+        b = 1164*(y-16)/1000 + 2018*(u-128)/1000;
+    公式二：颜色没那么失真
+        r = y + 1.4075*10000*(v - 128)/10000;
+        g = y - 0.3455*10000*(u - 128)/10000 - 0.7169*10000*(v - 128)/10000;
+        b = y + 1.779*10000*(u - 128)/10000;
